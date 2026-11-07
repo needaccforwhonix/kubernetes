@@ -57,6 +57,7 @@ import (
 	watch "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/authentication/serviceaccount"
 	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/ktesting"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	cgoresource "k8s.io/client-go/kubernetes/typed/resource/v1"
@@ -78,7 +79,6 @@ import (
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	"k8s.io/kubernetes/test/e2e/storage/drivers/proxy"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
-	"k8s.io/kubernetes/test/utils/client-go/ktesting"
 	"k8s.io/kubernetes/test/utils/image"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
@@ -191,7 +191,7 @@ func (nodes *Nodes) init(tCtx ktesting.TContext, minNodes, maxNodes int) {
 		cancel(errors.New("test has completed"))
 		wg.Wait()
 	})
-	_, err = claimInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err = claimInformer.AddEventHandlerWithOptions(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			claim := obj.(*resourceapi.ResourceClaim)
 			resourceClaimLogger.Info("New claim", "claim", format.Object(claim, 0))
@@ -210,7 +210,7 @@ func (nodes *Nodes) init(tCtx ktesting.TContext, minNodes, maxNodes int) {
 			claim := obj.(*resourceapi.ResourceClaim)
 			resourceClaimLogger.Info("Deleted claim", "claim", format.Object(claim, 0))
 		},
-	})
+	}, cache.HandlerOptions{Logger: &resourceClaimLogger})
 	tCtx.ExpectNoError(err, "AddEventHandler")
 	wg.Add(1)
 	go func() {

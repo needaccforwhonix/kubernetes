@@ -46,10 +46,11 @@ func TestDeclarativeValidate(t *testing.T) {
 			IsResourceRequest: true,
 			Verb:              "create",
 		})
-		testCases := map[string]struct {
+		type testCase struct {
 			input        *api.Pod
 			expectedErrs field.ErrorList
-		}{
+		}
+		testCases := map[string]testCase{
 			"valid": {
 				input: podtest.MakePod("foo"),
 			},
@@ -73,10 +74,48 @@ func TestDeclarativeValidate(t *testing.T) {
 					api.Toleration{Key: "invalid key", Operator: api.TolerationOpExists},
 				)),
 				expectedErrs: field.ErrorList{
-					field.Invalid(field.NewPath("spec", "tolerations").Index(0).Child("key"), nil, "").WithOrigin("format=k8s-label-key").MarkAlpha(),
+					field.Invalid(field.NewPath("spec", "tolerations").Index(0).Child("key"), nil, "").WithOrigin("format=k8s-label-key").MarkBeta(),
+				},
+			},
+			"activeDeadlineSeconds valid": {
+				input: func() *api.Pod {
+					p := podtest.MakePod("foo")
+					deadline := int64(30)
+					p.Spec.ActiveDeadlineSeconds = &deadline
+					return p
+				}(),
+			},
+			"activeDeadlineSeconds minimum boundary violation": {
+				input: func() *api.Pod {
+					p := podtest.MakePod("foo")
+					deadline := int64(0)
+					p.Spec.ActiveDeadlineSeconds = &deadline
+					return p
+				}(),
+				expectedErrs: field.ErrorList{
+					field.Invalid(field.NewPath("spec", "activeDeadlineSeconds"), int64(0), "").WithOrigin("minimum").MarkAlpha(),
+				},
+			},
+			"activeDeadlineSeconds maximum boundary violation": {
+				input: func() *api.Pod {
+					p := podtest.MakePod("foo")
+					deadline := int64(2147483648)
+					p.Spec.ActiveDeadlineSeconds = &deadline
+					return p
+				}(),
+				expectedErrs: field.ErrorList{
+					field.Invalid(field.NewPath("spec", "activeDeadlineSeconds"), int64(2147483648), "").WithOrigin("maximum").MarkAlpha(),
 				},
 			},
 		}
+
+		for _, tc := range InvalidPodSpecTestcases(field.NewPath("spec")) {
+			testCases["podspec:"+tc.ID] = testCase{
+				input:        podtest.MakePod("foo", tc.Tweaks...),
+				expectedErrs: tc.ExpectedErrs,
+			}
+		}
+
 		for k, tc := range testCases {
 			t.Run(k, func(t *testing.T) {
 				apitesting.VerifyValidationEquivalence(t, ctx, tc.input, registry.Strategy, tc.expectedErrs)
@@ -89,6 +128,60 @@ func TestDeclarativeValidate(t *testing.T) {
 			baseObj.Spec.EvictionResponders = responders
 			baseObj.Spec.SchedulingGroup = schedulingGroup
 		})
+	}
+}
+
+func TestDeclarativeValidateUpdate(t *testing.T) {
+	for _, apiVersion := range apiVersions {
+		ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
+			APIPrefix:         "api",
+			APIGroup:          "",
+			APIVersion:        apiVersion,
+			Resource:          "pods",
+			Name:              "foo",
+			IsResourceRequest: true,
+			Verb:              "update",
+		})
+		deadlinePath := field.NewPath("spec", "activeDeadlineSeconds")
+		testCases := map[string]struct {
+			oldDeadline  int64
+			newDeadline  int64
+			expectedErrs field.ErrorList
+		}{
+			"activeDeadlineSeconds decreased": {
+				oldDeadline: 5,
+				newDeadline: 3,
+			},
+			"activeDeadlineSeconds minimum boundary violation": {
+				oldDeadline: 5,
+				newDeadline: 0,
+				expectedErrs: field.ErrorList{
+					field.Invalid(deadlinePath, int64(0), "").WithOrigin("minimum").MarkAlpha(),
+				},
+			},
+			"activeDeadlineSeconds maximum boundary violation": {
+				oldDeadline: 5,
+				newDeadline: 2147483648,
+				expectedErrs: field.ErrorList{
+					field.Invalid(deadlinePath, int64(2147483648), "").WithOrigin("maximum").MarkAlpha(),
+					// ValidatePodUpdate range checks this field itself, and that
+					// check is not covered by declarative validation.
+					field.Invalid(deadlinePath, int64(2147483648), "").MarkFromImperative(),
+				},
+			},
+		}
+		for k, tc := range testCases {
+			t.Run(k, func(t *testing.T) {
+				oldObj := podtest.MakePod("foo")
+				oldObj.ResourceVersion = "1"
+				oldDeadline := tc.oldDeadline
+				oldObj.Spec.ActiveDeadlineSeconds = &oldDeadline
+				updateObj := oldObj.DeepCopy()
+				newDeadline := tc.newDeadline
+				updateObj.Spec.ActiveDeadlineSeconds = &newDeadline
+				apitesting.VerifyUpdateValidationEquivalence(t, ctx, updateObj, oldObj, registry.Strategy, tc.expectedErrs)
+			})
+		}
 	}
 }
 
@@ -391,73 +484,86 @@ func TestDeclarativeValidateStatusUpdate(t *testing.T) {
 			IsResourceRequest: true,
 			Verb:              "update",
 		})
-		conditionPath := field.NewPath("status", "volumeHealth").Index(0).Child("healthConditions")
+		conditionPath := field.NewPath("status", "volumeStatuses").Index(0).Child("healthStatus", "healthConditions")
 		tests := map[string]struct {
-			volumeHealth []api.PodVolumeHealth
+			volumeHealth []api.PodVolumeStatus
 			expectedErrs field.ErrorList
 		}{
+			"empty volume status": {},
 			"valid": {
-				volumeHealth: []api.PodVolumeHealth{{
-					Name:             "vol",
-					HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: "DiskSlow"}},
+				volumeHealth: []api.PodVolumeStatus{{
+					Name:         "vol",
+					HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: "DiskSlow"}}},
+				}},
+			},
+			"healthy status accepted": {
+				volumeHealth: []api.PodVolumeStatus{{
+					Name:         "vol",
+					HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthHealthy, Reason: "VolumeHealthy"}}},
+				}},
+			},
+			"unknown status accepted": {
+				volumeHealth: []api.PodVolumeStatus{{
+					Name:         "vol",
+					HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthUnknown, Reason: "FutureHealth"}}},
 				}},
 			},
 			"name required": {
-				volumeHealth: []api.PodVolumeHealth{{}},
+				volumeHealth: []api.PodVolumeStatus{{}},
 				expectedErrs: field.ErrorList{
-					field.Required(field.NewPath("status", "volumeHealth").Index(0).Child("name"), ""),
+					field.Required(field.NewPath("status", "volumeStatuses").Index(0).Child("name"), ""),
 				},
 			},
 			"duplicate volumes": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol"}, {Name: "vol"}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol"}, {Name: "vol"}},
 				expectedErrs: field.ErrorList{
-					field.Duplicate(field.NewPath("status", "volumeHealth").Index(1), nil),
+					field.Duplicate(field.NewPath("status", "volumeStatuses").Index(1), nil),
 				},
 			},
 			"status required": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: []api.VolumeHealthCondition{{Reason: "DiskSlow"}}}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Reason: "DiskSlow"}}}}},
 				expectedErrs: field.ErrorList{
 					field.Required(conditionPath.Index(0).Child("status"), ""),
 				},
 			},
 			"status enum": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: []api.VolumeHealthCondition{{Status: "Invalid", Reason: "DiskSlow"}}}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: "Invalid", Reason: "DiskSlow"}}}}},
 				expectedErrs: field.ErrorList{
 					field.NotSupported(conditionPath.Index(0).Child("status"), api.VolumeHealthStatusType("Invalid"), []api.VolumeHealthStatusType(nil)),
 				},
 			},
 			"reason required": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded}}}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded}}}}},
 				expectedErrs: field.ErrorList{
 					field.Required(conditionPath.Index(0).Child("reason"), ""),
 				},
 			},
 			"reason max bytes": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: strings.Repeat("a", 257)}}}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: strings.Repeat("a", 257)}}}}},
 				expectedErrs: field.ErrorList{
 					field.TooLong(conditionPath.Index(0).Child("reason"), "", 256).WithOrigin("maxBytes"),
 				},
 			},
 			"message max bytes": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: "DiskSlow", Message: strings.Repeat("𝄞", 257)}}}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{{Status: api.VolumeHealthDegraded, Reason: "DiskSlow", Message: strings.Repeat("𝄞", 257)}}}}},
 				expectedErrs: field.ErrorList{
 					field.TooLong(conditionPath.Index(0).Child("message"), "", 1024).WithOrigin("maxBytes"),
 				},
 			},
 			"duplicate conditions": {
-				volumeHealth: []api.PodVolumeHealth{{
+				volumeHealth: []api.PodVolumeStatus{{
 					Name: "vol",
-					HealthConditions: []api.VolumeHealthCondition{
+					HealthStatus: &api.VolumeHealthStatus{HealthConditions: []api.VolumeHealthCondition{
 						{Status: api.VolumeHealthDegraded, Reason: "DiskSlow"},
 						{Status: api.VolumeHealthDegraded, Reason: "DiskSlow"},
-					},
+					}},
 				}},
 				expectedErrs: field.ErrorList{
 					field.Duplicate(conditionPath.Index(1), nil),
 				},
 			},
 			"too many conditions": {
-				volumeHealth: []api.PodVolumeHealth{{Name: "vol", HealthConditions: makePodVolumeHealthConditions(17)}},
+				volumeHealth: []api.PodVolumeStatus{{Name: "vol", HealthStatus: &api.VolumeHealthStatus{HealthConditions: makePodVolumeHealthConditions(17)}}},
 				expectedErrs: field.ErrorList{
 					field.TooMany(conditionPath, 17, 16).WithOrigin("maxItems"),
 				},
@@ -469,7 +575,7 @@ func TestDeclarativeValidateStatusUpdate(t *testing.T) {
 				oldObj := podtest.MakePod("foo", podtest.SetVolumes(api.Volume{Name: "vol"}))
 				oldObj.ResourceVersion = "1"
 				updateObj := oldObj.DeepCopy()
-				updateObj.Status.VolumeHealth = tc.volumeHealth
+				updateObj.Status.VolumeStatuses = tc.volumeHealth
 				apitesting.VerifyUpdateValidationEquivalence(t, ctx, updateObj, oldObj, registry.StatusStrategy, tc.expectedErrs, apitesting.WithSubResources("status"))
 			})
 		}

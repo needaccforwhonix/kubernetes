@@ -267,7 +267,9 @@ type NodeExpandableVolumePlugin interface {
 type ResizableEphemeralVolumePlugin interface {
 	VolumePlugin
 	// ResizeEphemeralVolume resizes the volume on the node.
-	ResizeEphemeralVolume(spec *Spec, pod *v1.Pod, newSize *resource.Quantity) error
+	ResizeEphemeralVolume(spec *Spec, pod *v1.Pod) error
+	// EffectiveEphemeralVolumeLimit returns the effective size limit for the volume.
+	EffectiveEphemeralVolumeLimit(spec *Spec, pod *v1.Pod) (*resource.Quantity, error)
 }
 
 // BlockVolumePlugin is an extend interface of VolumePlugin and is used for block volumes support.
@@ -1002,7 +1004,7 @@ func NewPersistentVolumeRecyclerPodTemplate() *v1.Pod {
 			Containers: []v1.Container{
 				{
 					Name:    "pv-recycler",
-					Image:   "registry.k8s.io/build-image/debian-base:bookworm-v1.0.6",
+					Image:   "registry.k8s.io/build-image/debian-base:trixie-v1.0.1",
 					Command: []string{"/bin/sh"},
 					Args:    []string{"-c", "test -e /scrub && find /scrub -mindepth 1 -delete && test -z \"$(ls -A /scrub)\" || exit 1"},
 					VolumeMounts: []v1.VolumeMount{

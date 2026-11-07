@@ -24,7 +24,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1"
 	resourceapi "k8s.io/api/resource/v1"
-	schedulingv1alpha3 "k8s.io/api/scheduling/v1alpha3"
 	schedulingv1beta1 "k8s.io/api/scheduling/v1beta1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -904,12 +903,17 @@ func (n *NodeWrapper) UID(s string) *NodeWrapper {
 	return n
 }
 
-// Label applies a {k,v} label pair to the inner node.
 func (n *NodeWrapper) Label(k, v string) *NodeWrapper {
-	if n.Labels == nil {
-		n.Labels = make(map[string]string)
+	if n.Node.Labels == nil {
+		n.Node.Labels = make(map[string]string)
 	}
-	n.Labels[k] = v
+	n.Node.Labels[k] = v
+	return n
+}
+
+// Labels applies a map of {k,v} label pairs to the inner node.
+func (n *NodeWrapper) Labels(labels map[string]string) *NodeWrapper {
+	n.Node.Labels = labels
 	return n
 }
 
@@ -1618,6 +1622,21 @@ func (wrapper *PodGroupWrapper) UID(uid types.UID) *PodGroupWrapper {
 	return wrapper
 }
 
+// CreationTimestamp sets the CreationTimestamp of the inner PodGroup.
+func (wrapper *PodGroupWrapper) CreationTimestamp(t metav1.Time) *PodGroupWrapper {
+	wrapper.PodGroup.CreationTimestamp = t
+	return wrapper
+}
+
+// Label sets a {k,v} pair to the inner PodGroup label.
+func (wrapper *PodGroupWrapper) Label(k, v string) *PodGroupWrapper {
+	if wrapper.PodGroup.Labels == nil {
+		wrapper.PodGroup.Labels = make(map[string]string)
+	}
+	wrapper.PodGroup.Labels[k] = v
+	return wrapper
+}
+
 // Obj returns the inner PodGroup.
 func (wrapper *PodGroupWrapper) Obj() *schedulingv1beta1.PodGroup {
 	return &wrapper.PodGroup
@@ -1639,10 +1658,10 @@ func (wrapper *PodGroupWrapper) BasicPolicy() *PodGroupWrapper {
 }
 
 // WorkloadRef sets appropriate WorkloadRef field of the inner PodGroup.
-func (wrapper *PodGroupWrapper) WorkloadRef(templateName, workloadName string) *PodGroupWrapper {
+func (wrapper *PodGroupWrapper) WorkloadRef(workloadName, templateName string) *PodGroupWrapper {
 	wrapper.PodGroup.Spec.WorkloadRef = &schedulingv1beta1.WorkloadReference{
-		TemplateName: templateName,
 		WorkloadName: workloadName,
+		TemplateName: templateName,
 	}
 	return wrapper
 }
@@ -1698,6 +1717,18 @@ func (wrapper *PodGroupWrapper) PreemptionPolicy(policy schedulingv1beta1.Preemp
 // ParentCompositePodGroup sets the parent composite pod group name of the inner PodGroup.
 func (wrapper *PodGroupWrapper) ParentCompositePodGroup(parent string) *PodGroupWrapper {
 	wrapper.PodGroup.Spec.ParentCompositePodGroupName = &parent
+	return wrapper
+}
+
+// Generation sets `generation` as the generation of the inner PodGroup.
+func (wrapper *PodGroupWrapper) Generation(generation int64) *PodGroupWrapper {
+	wrapper.PodGroup.Generation = generation
+	return wrapper
+}
+
+// Conditions sets `conditions` as .Status.Conditions of the inner PodGroup.
+func (wrapper *PodGroupWrapper) Conditions(conditions ...metav1.Condition) *PodGroupWrapper {
+	wrapper.PodGroup.Status.Conditions = conditions
 	return wrapper
 }
 
@@ -1865,7 +1896,7 @@ func (wrapper *CompositePodGroupTemplateWrapper) BasicPolicy() *CompositePodGrou
 
 // CompositePodGroupWrapper wraps a CompositePodGroup inside.
 type CompositePodGroupWrapper struct {
-	schedulingv1alpha3.CompositePodGroup
+	schedulingv1beta1.CompositePodGroup
 }
 
 // MakeCompositePodGroup creates a CompositePodGroup wrapper.
@@ -1874,7 +1905,7 @@ func MakeCompositePodGroup() *CompositePodGroupWrapper {
 }
 
 // Obj returns the inner CompositePodGroup.
-func (wrapper *CompositePodGroupWrapper) Obj() *schedulingv1alpha3.CompositePodGroup {
+func (wrapper *CompositePodGroupWrapper) Obj() *schedulingv1beta1.CompositePodGroup {
 	return &wrapper.CompositePodGroup
 }
 
@@ -1891,7 +1922,7 @@ func (wrapper *CompositePodGroupWrapper) Priority(priority int32) *CompositePodG
 }
 
 // PreemptionPolicy sets the preemption policy of the inner CompositePodGroup.
-func (wrapper *CompositePodGroupWrapper) PreemptionPolicy(policy schedulingv1alpha3.PreemptionPolicy) *CompositePodGroupWrapper {
+func (wrapper *CompositePodGroupWrapper) PreemptionPolicy(policy schedulingv1beta1.PreemptionPolicy) *CompositePodGroupWrapper {
 	wrapper.CompositePodGroup.Spec.PreemptionPolicy = &policy
 	return wrapper
 }
@@ -1908,6 +1939,21 @@ func (wrapper *CompositePodGroupWrapper) UID(uid string) *CompositePodGroupWrapp
 	return wrapper
 }
 
+// CreationTimestamp sets the CreationTimestamp of the inner CompositePodGroup.
+func (wrapper *CompositePodGroupWrapper) CreationTimestamp(t metav1.Time) *CompositePodGroupWrapper {
+	wrapper.CompositePodGroup.CreationTimestamp = t
+	return wrapper
+}
+
+// Label sets a {k,v} pair to the inner CompositePodGroup label.
+func (wrapper *CompositePodGroupWrapper) Label(k, v string) *CompositePodGroupWrapper {
+	if wrapper.CompositePodGroup.Labels == nil {
+		wrapper.CompositePodGroup.Labels = make(map[string]string)
+	}
+	wrapper.CompositePodGroup.Labels[k] = v
+	return wrapper
+}
+
 // ParentCompositePodGroup sets the parent CompositePodGroup.
 func (wrapper *CompositePodGroupWrapper) ParentCompositePodGroup(parent string) *CompositePodGroupWrapper {
 	wrapper.CompositePodGroup.Spec.ParentCompositePodGroupName = new(parent)
@@ -1916,31 +1962,31 @@ func (wrapper *CompositePodGroupWrapper) ParentCompositePodGroup(parent string) 
 
 // MinGroupCount sets the policy to Gang with the given minGroupCount.
 func (wrapper *CompositePodGroupWrapper) MinGroupCount(minGroupCount int32) *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.SchedulingPolicy.Gang = &schedulingv1alpha3.CompositeGangSchedulingPolicy{MinGroupCount: minGroupCount}
+	wrapper.CompositePodGroup.Spec.SchedulingPolicy.Gang = &schedulingv1beta1.CompositeGangSchedulingPolicy{MinGroupCount: minGroupCount}
 	return wrapper
 }
 
 // BasicPolicy sets the policy to Basic.
 func (wrapper *CompositePodGroupWrapper) BasicPolicy() *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.SchedulingPolicy.Basic = &schedulingv1alpha3.CompositeBasicSchedulingPolicy{}
+	wrapper.CompositePodGroup.Spec.SchedulingPolicy.Basic = &schedulingv1beta1.CompositeBasicSchedulingPolicy{}
 	return wrapper
 }
 
 // DisruptionModeAll sets the disruption mode of the inner CompositePodGroup to All.
 func (wrapper *CompositePodGroupWrapper) DisruptionModeAll() *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.DisruptionMode = &schedulingv1alpha3.CompositeDisruptionMode{All: &schedulingv1alpha3.AllCompositeDisruptionMode{}}
+	wrapper.CompositePodGroup.Spec.DisruptionMode = &schedulingv1beta1.CompositeDisruptionMode{All: &schedulingv1beta1.AllCompositeDisruptionMode{}}
 	return wrapper
 }
 
 // DisruptionModeSingle sets the disruption mode of the inner CompositePodGroup to Single.
 func (wrapper *CompositePodGroupWrapper) DisruptionModeSingle() *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.DisruptionMode = &schedulingv1alpha3.CompositeDisruptionMode{Single: &schedulingv1alpha3.SingleCompositeDisruptionMode{}}
+	wrapper.CompositePodGroup.Spec.DisruptionMode = &schedulingv1beta1.CompositeDisruptionMode{Single: &schedulingv1beta1.SingleCompositeDisruptionMode{}}
 	return wrapper
 }
 
 // WorkloadRef sets the WorkloadReference for the CompositePodGroup.
 func (wrapper *CompositePodGroupWrapper) WorkloadRef(workloadName, templateName string) *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.WorkloadRef = &schedulingv1alpha3.WorkloadReference{
+	wrapper.CompositePodGroup.Spec.WorkloadRef = &schedulingv1beta1.WorkloadReference{
 		WorkloadName: workloadName,
 		TemplateName: templateName,
 	}
@@ -1949,12 +1995,24 @@ func (wrapper *CompositePodGroupWrapper) WorkloadRef(workloadName, templateName 
 
 // TopologyKey sets appropriate TopologyKey field in the SchedulingConstraints of the inner CompositePodGroup.
 func (wrapper *CompositePodGroupWrapper) TopologyKey(topologyKey string) *CompositePodGroupWrapper {
-	wrapper.CompositePodGroup.Spec.SchedulingConstraints = &schedulingv1alpha3.CompositePodGroupSchedulingConstraints{
-		Topology: []schedulingv1alpha3.TopologyConstraint{
+	wrapper.CompositePodGroup.Spec.SchedulingConstraints = &schedulingv1beta1.CompositePodGroupSchedulingConstraints{
+		Topology: []schedulingv1beta1.TopologyConstraint{
 			{
 				Key: topologyKey,
 			},
 		},
 	}
+	return wrapper
+}
+
+// Generation sets `generation` as the generation of the inner CompositePodGroup.
+func (wrapper *CompositePodGroupWrapper) Generation(generation int64) *CompositePodGroupWrapper {
+	wrapper.CompositePodGroup.Generation = generation
+	return wrapper
+}
+
+// Conditions sets `conditions` as .Status.Conditions of the inner CompositePodGroup.
+func (wrapper *CompositePodGroupWrapper) Conditions(conditions ...metav1.Condition) *CompositePodGroupWrapper {
+	wrapper.CompositePodGroup.Status.Conditions = conditions
 	return wrapper
 }

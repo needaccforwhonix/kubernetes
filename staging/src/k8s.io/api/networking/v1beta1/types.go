@@ -369,6 +369,9 @@ type IngressClassSpec struct {
 	// domain-prefixed path no more than 250 characters in length, e.g.
 	// "acme.io/ingress-controller". This field is immutable.
 	// +required
+	// +k8s:alpha(since: "1.38")=+k8s:required
+	// +k8s:alpha(since: "1.38")=+k8s:immutable
+	// +k8s:alpha(since: "1.38")=+k8s:maxBytes=250
 	Controller string `json:"controller,omitempty" protobuf:"bytes,1,opt,name=controller"`
 
 	// parameters is a link to a custom resource containing additional
@@ -555,7 +558,7 @@ type ServiceCIDRStatus struct {
 	// +patchStrategy=merge
 	// +listType=map
 	// +listMapKey=type
-	// +k8s:alpha(since: "1.37")=+k8s:eachVal=+k8s:opaqueType
+	// +k8s:beta(since: "1.38")=+k8s:eachVal=+k8s:opaqueType
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
 

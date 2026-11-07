@@ -33,7 +33,6 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/proxy"
 	"k8s.io/client-go/kubernetes"
 	admissionregistrationv1client "k8s.io/client-go/kubernetes/typed/admissionregistration/v1"
@@ -42,7 +41,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/cluster/ports"
-	"k8s.io/kubernetes/pkg/features"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/registry/core/componentstatus"
 	endpointsstore "k8s.io/kubernetes/pkg/registry/core/endpoint/storage"
@@ -136,7 +134,14 @@ func New(c Config, authorizer authorizer.UnconditionalAuthorizer) (*legacyProvid
 }
 
 func (p *legacyProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, error) {
-	apiGroupInfo, err := p.GenericConfig.NewRESTStorage(apiResourceConfigSource, restOptionsGetter)
+	genericConfigSource := apiResourceConfigSource
+	if p.ServiceAccountIssuer != nil {
+		// the serviceaccounts storage built below replaces the generic one, so
+		// keep the generic provider from building a storage that would only be
+		// discarded: each one stands up its own etcd watch cache.
+		genericConfigSource = serviceAccountsDisabled{apiResourceConfigSource}
+	}
+	apiGroupInfo, err := p.GenericConfig.NewRESTStorage(genericConfigSource, restOptionsGetter)
 	if err != nil {
 		return genericapiserver.APIGroupInfo{}, err
 	}
@@ -238,9 +243,7 @@ func (p *legacyProvider) NewRESTStorage(apiResourceConfigSource serverstorage.AP
 			storage[resource+"/eviction"] = podStorage.Eviction
 		}
 		storage[resource+"/ephemeralcontainers"] = podStorage.EphemeralContainers
-		if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-			storage[resource+"/resize"] = podStorage.Resize
-		}
+		storage[resource+"/resize"] = podStorage.Resize
 	}
 	if resource := "bindings"; apiResourceConfigSource.ResourceEnabled(corev1.SchemeGroupVersion.WithResource(resource)) {
 		storage[resource] = podStorage.LegacyBinding
@@ -263,12 +266,10 @@ func (p *legacyProvider) NewRESTStorage(apiResourceConfigSource serverstorage.AP
 		}
 	}
 
-	// potentially override generic storage for service account (with pod support)
+	// use the storage for service account with pod support, built above
 	if resource := "serviceaccounts"; serviceAccountStorage != nil && apiResourceConfigSource.ResourceEnabled(corev1.SchemeGroupVersion.WithResource(resource)) {
-		// don't leak go routines
-		storage[resource].Destroy()
-		if storage[resource+"/token"] != nil {
-			storage[resource+"/token"].Destroy()
+		if _, ok := storage[resource]; ok {
+			return genericapiserver.APIGroupInfo{}, fmt.Errorf("%s storage was already built by the generic provider", resource)
 		}
 
 		storage[resource] = serviceAccountStorage
@@ -434,6 +435,29 @@ func (p *legacyProvider) PostStartHook() (string, genericapiserver.PostStartHook
 
 func (p *legacyProvider) GroupName() string {
 	return api.GroupName
+}
+
+var serviceAccountsResource = corev1.SchemeGroupVersion.WithResource("serviceaccounts")
+
+// serviceAccountsDisabled reports core/v1 serviceaccounts as not enabled, so a
+// caller that builds that storage itself can keep another provider from
+// building one too.
+type serviceAccountsDisabled struct {
+	serverstorage.APIResourceConfigSource
+}
+
+func (s serviceAccountsDisabled) ResourceEnabled(resource schema.GroupVersionResource) bool {
+	if resource == serviceAccountsResource {
+		return false
+	}
+	return s.APIResourceConfigSource.ResourceEnabled(resource)
+}
+
+func (s serviceAccountsDisabled) ResourceExplicitlyEnabled(resource schema.GroupVersionResource) bool {
+	if resource == serviceAccountsResource {
+		return false
+	}
+	return s.APIResourceConfigSource.ResourceExplicitlyEnabled(resource)
 }
 
 type componentStatusStorage struct {
